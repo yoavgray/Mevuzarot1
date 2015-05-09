@@ -6,6 +6,9 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.UUID;
 
+import com.amazonaws.AmazonClientException;
+import com.amazonaws.auth.profile.ProfileCredentialsProvider;
+import com.amazonaws.services.sqs.model.GetQueueUrlResult;
 import org.apache.commons.codec.binary.Base64;
 
 import com.amazonaws.auth.AWSCredentials;
@@ -58,7 +61,11 @@ public class LocalApp {
 		uploadInputFileToS3(inputFileName);
 
 		// send a "start" message to Manager through SQS
-		sendMessageToManager(id + "\t" + workersRatio);
+		sendMessageToManager(bucketName + "\t" + inputFileName + "\t"+ workersRatio);
+
+		//if not exists, creates a managerQueue & localAppQueue.
+		startQueue(managerQueue);
+		startQueue(localAppQueue);
 
 		// initialize the manager node if it does not exist yet
 		startManagerNode("t2.micro", "ami-1ecae776", "Ass1SecurityGroup");
@@ -74,25 +81,18 @@ public class LocalApp {
 	}
 
 	private static void sendMessageToManager(String message) {
-		String queueUrl;
 
 		System.out.println("Sending manager the opening message.\n");
-		List<String> listQueuesUrls = sqsClient.listQueues(managerQueue)
-				.getQueueUrls();
-		if (listQueuesUrls.isEmpty()) {
-			CreateQueueRequest createQueueRequest = new CreateQueueRequest(
-					managerQueue);
-			queueUrl = sqsClient.createQueue(createQueueRequest).getQueueUrl();
-		} else {
-			queueUrl = listQueuesUrls.get(0);
-		}
 
-		sqsClient.sendMessage(new SendMessageRequest(queueUrl, message));
+
+		GetQueueUrlResult queueUrl=  sqsClient.getQueueUrl(managerQueue);
+
+		sqsClient.sendMessage(new SendMessageRequest(queueUrl.getQueueUrl(), message));
 	}
 
 	private static void uploadInputFileToS3(String fileToUpload) {
 		File f = new File(fileToUpload);
-		PutObjectRequest por = new PutObjectRequest(bucketName, "InputFile", f);
+		PutObjectRequest por = new PutObjectRequest(bucketName, fileToUpload, f);
 		// Upload the file
 		s3Client.putObject(por);
 		System.out.println("File uploaded.");
@@ -120,8 +120,7 @@ public class LocalApp {
 			tagsList.add(newTag);
 			instanceIdList.add(insId);
 
-			ec2Client
-					.createTags(new CreateTagsRequest(instanceIdList, tagsList));
+			ec2Client.createTags(new CreateTagsRequest(instanceIdList, tagsList));
 			System.out.println("Manager Node running...");
 		}
 
@@ -181,28 +180,41 @@ public class LocalApp {
 	 * starts necessary AmazonAWS services for this assignment
 	 */
 	private static void initAmazonAwsServices() {
-		AWSCredentials credentials;
+		AWSCredentials credentials = null;
 		try {
-			credentials = new PropertiesCredentials(
-					LocalApp.class
-							.getResourceAsStream("/AwsCredentials.properties"));
+			credentials = new ProfileCredentialsProvider().getCredentials();
+//			credentials = new PropertiesCredentials(
+//					LocalApp.class
+//						.getResourceAsStream("../../AwsCredentials.properties"));
 			ec2Client = new AmazonEC2Client(credentials);
 			s3Client = new AmazonS3Client(credentials);
 			sqsClient = new AmazonSQSClient(credentials);
 			bucketName = credentials.getAWSAccessKeyId().toLowerCase();
-		} catch (IOException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-
+		} catch (Exception e) {
+			throw new AmazonClientException(
+					"Cannot load the credentials from the credential profiles file. " +
+							"Please make sure that your credentials file is at the correct " +
+							"location (/AwsCredentials.properties or ~/.aws/credentials), and is in valid format.",
+					e);
 		}
 		if (!s3Client.doesBucketExist(bucketName)) {
 			s3Client.createBucket(bucketName);
 		}
-
 		id = UUID.randomUUID().toString();
 
 		System.out.println("Initialized EC2, S3, SQS and created buckets "
 				+ bucketName + " and results");
+	}
+	// starts a new Queue if not exists already
+
+	private static void startQueue(String queueName) {
+		List<String> listQueuesUrls = sqsClient.listQueues(queueName)
+				.getQueueUrls();
+		if (listQueuesUrls.isEmpty()) {
+			CreateQueueRequest createQueueRequest = new CreateQueueRequest(
+					queueName);
+			sqsClient.createQueue(createQueueRequest);
+		}
 	}
 
 }

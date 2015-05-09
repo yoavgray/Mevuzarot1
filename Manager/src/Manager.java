@@ -9,6 +9,7 @@ import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
 import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.PropertiesCredentials;
+import com.amazonaws.auth.profile.ProfileCredentialsProvider;
 import com.amazonaws.services.ec2.AmazonEC2;
 import com.amazonaws.services.ec2.AmazonEC2Client;
 import com.amazonaws.services.ec2.model.CreateTagsRequest;
@@ -37,14 +38,11 @@ public class Manager {
 	public static final String workersQueue = "WorkersQueue";
 	public static final String resultsQueue = "ResultsQueue";
 	public static final String managerQueue = "ManagerQueue";
-
+	public static final Integer maxNumberOfMessages = 1;
 	public static boolean isTerminated, doneReadingMsgFromLocalApp;
 	public static AmazonEC2 ec2Client;
 	public static AmazonS3 s3Client;
 	public static AmazonSQS sqsClient;
-	public static String id;
-	public static String bucketName;
-	public static int n;
 	public static int workerId;
 	public static int numOfUrlsSent;
 	public static ArrayList<String> WorkersIdList;
@@ -58,9 +56,10 @@ public class Manager {
 		doneReadingMsgFromLocalApp = false;
 		// initialize all needed AWS services for the assignment
 		initAmazonAwsServices();
+
 		// start WorkersQueue and ResultsQueue
-		startWorkersQueue();
-		startResultsQueue();
+		startQueue(workersQueue);
+		startQueue(resultsQueue);
 
 		try {
 			while (!isTerminated) {
@@ -70,8 +69,11 @@ public class Manager {
 					processWorkersMessages();
 				}
 			}
-			System.out
-					.println("workers job is done. terminating manager instance");
+
+
+			System.out.println("workers job is done. terminating manager instance");
+			//check there is not duplications in results file
+			//termination upon argument
 			cleanUpAndSendResponse();
 
 		} catch (AmazonServiceException ase) {
@@ -87,22 +89,13 @@ public class Manager {
 
 	}
 
-	private static void startResultsQueue() {
-		List<String> listQueuesUrls = sqsClient.listQueues(resultsQueue)
+// starts a new Queue if not exists already
+	private static void startQueue(String queueName) {
+		List<String> listQueuesUrls = sqsClient.listQueues(queueName)
 				.getQueueUrls();
 		if (listQueuesUrls.isEmpty()) {
 			CreateQueueRequest createQueueRequest = new CreateQueueRequest(
-					resultsQueue);
-			sqsClient.createQueue(createQueueRequest);
-		}
-	}
-
-	private static void startWorkersQueue() {
-		List<String> listQueuesUrls = sqsClient.listQueues(workersQueue)
-				.getQueueUrls();
-		if (listQueuesUrls.isEmpty()) {
-			CreateQueueRequest createQueueRequest = new CreateQueueRequest(
-					workersQueue);
+					queueName);
 			sqsClient.createQueue(createQueueRequest);
 		}
 	}
@@ -147,30 +140,39 @@ public class Manager {
 			AmazonClientException, IOException {
 		String[] body;
 		numOfUrlsSent = 0;
+		String fileName = null;
+		String bucketName = null;
+		int n = 0;
 
 		//Parse message from Manager
 		System.out.println("Receiving messages from LocalApp.\n");
 		ReceiveMessageRequest receiveMessageRequest = new ReceiveMessageRequest(
-				"ManagerQueue");
+				managerQueue);//.withMaxNumberOfMessages(maxNumberOfMessages);		//process one message each time
 		List<Message> messages = sqsClient
 				.receiveMessage(receiveMessageRequest).getMessages();
 		String messageRecieptHandle = null;
+
+
 		for (Message message : messages) {
 			messageRecieptHandle = message.getReceiptHandle();
 			String msg = message.getBody();
 			body = msg.split("\t");
-			id = body[0];
-			n = Integer.parseInt(body[1]);
+			if (body.length == 3) {
+				bucketName = body[0];
+				fileName = body[1];
+				n = Integer.parseInt(body[2]);
+			}
+			else System.out.println("Manager - Error parsing message, missing bucketName or fileName or workersRatio");
 		}
 
 		// Delete the message from the queue
 		System.out
 				.println("Done reading message from LocalApp. Deleting the message.\n");
-		sqsClient.deleteMessage(new DeleteMessageRequest("ManagerQueue",
+		sqsClient.deleteMessage(new DeleteMessageRequest(managerQueue,
 				messageRecieptHandle));
 
 		//Download the input file from S3 and parse it
-		BufferedReader br = downloadInputFileFromS3(id);
+		BufferedReader br = downloadInputFileFromS3(bucketName, fileName);
 
 		String url;
 		System.out.println("Starting to send work to workers...");
@@ -217,28 +219,30 @@ public class Manager {
 	 * Download the input file from S3 after receiving the opening message from
 	 * LocalApp
 	 * 
-	 * @param id
-	 *            the application id to download from
+	 * @param bucketName
+	 *            the application bucket to download from
+	 * @param fileName
+	 * 			  filename to download from S3
 	 * @return a BufferedReader instance with the input file's data
 	 */
-	private static BufferedReader downloadInputFileFromS3(String id) {
+	private static BufferedReader downloadInputFileFromS3(String bucketName, String fileName) {
 		System.out.println("Downloading InputFile from S3");
 		S3Object s3Object = s3Client.getObject(new GetObjectRequest(bucketName,
-				"InputFile"));
+				fileName));
 		BufferedReader reader = new BufferedReader(new InputStreamReader(
 				s3Object.getObjectContent()));
-		s3Client.deleteObject(bucketName, "InputFile");
+		s3Client.deleteObject(bucketName, fileName);
 		return reader;
 	}
 
 	private static void initAmazonAwsServices() throws IOException {
 		// Set AWS credentials and create services
-		AWSCredentials credentials = new PropertiesCredentials(
-				Manager.class.getResourceAsStream("AwsCredentials.properties"));
+
+		AWSCredentials credentials = new ProfileCredentialsProvider().getCredentials();
 		ec2Client = new AmazonEC2Client(credentials);
 		s3Client = new AmazonS3Client(credentials);
 		sqsClient = new AmazonSQSClient(credentials);
-		bucketName = credentials.getAWSAccessKeyId().toLowerCase();
+//		bucketName = credentials.getAWSAccessKeyId().toLowerCase();
 		WorkersIdList = new ArrayList<String>();
 	}
 

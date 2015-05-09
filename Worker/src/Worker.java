@@ -16,6 +16,7 @@ import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
 import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.PropertiesCredentials;
+import com.amazonaws.auth.profile.ProfileCredentialsProvider;
 import com.amazonaws.services.ec2.AmazonEC2;
 import com.amazonaws.services.ec2.AmazonEC2Client;
 import com.amazonaws.services.ec2.model.DescribeInstancesRequest;
@@ -62,7 +63,7 @@ public class Worker {
 
 			System.out.println("Receiving messages from Manager.\n");
 			ReceiveMessageRequest receiveMessageRequest = new ReceiveMessageRequest(
-					"WorkersQueue");
+					workerQueue);
 			List<Message> messages = sqsClient.receiveMessage(
 					receiveMessageRequest).getMessages();
 			if (!messages.isEmpty()) {
@@ -98,7 +99,7 @@ public class Worker {
 						.println("No more messages for worker! Terminating :)");
 				//TODO return this: TerminateWorker();
 				
-				doneWork = true;
+//				doneWork = true;
 			}
 		}
 
@@ -128,8 +129,7 @@ public class Worker {
 
 	private static void initAmazonAwsServices() throws IOException {
 		// Set AWS credentials and create services
-		AWSCredentials credentials = new PropertiesCredentials(
-				Worker.class.getResourceAsStream("AwsCredentials.properties"));
+		AWSCredentials credentials = new ProfileCredentialsProvider().getCredentials();
 		ec2Client = new AmazonEC2Client(credentials);
 		s3Client = new AmazonS3Client(credentials);
 		sqsClient = new AmazonSQSClient(credentials);

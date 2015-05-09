@@ -22,8 +22,6 @@ import com.amazonaws.services.ec2.model.RunInstancesResult;
 import com.amazonaws.services.ec2.model.Tag;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
-import com.amazonaws.services.s3.model.CreateBucketRequest;
-import com.amazonaws.services.s3.model.GetBucketLocationRequest;
 import com.amazonaws.services.s3.model.PutObjectRequest;
 import com.amazonaws.services.sqs.AmazonSQS;
 import com.amazonaws.services.sqs.AmazonSQSClient;
@@ -31,6 +29,8 @@ import com.amazonaws.services.sqs.model.CreateQueueRequest;
 import com.amazonaws.services.sqs.model.SendMessageRequest;
 
 public class LocalApp {
+	private static final int RUNNING = 16;
+	private static final int PENDING = 0;
 	public static final String managerQueue = "ManagerQueue";
 	public static final String localAppQueue = "LocalAppQueue";
 
@@ -41,7 +41,7 @@ public class LocalApp {
 	public static String instanceType;
 	public static String amiID;
 	public static String securityGroup;
-	public static int numOfWorkers;
+	public static int workersRatio;
 
 	public static void main(String[] args) throws Exception {
 		if (args == null || args.length < 3 || args.length > 4)
@@ -49,7 +49,7 @@ public class LocalApp {
 
 		String inputFileName = args[0];
 		String outputFileName = args[1];
-		numOfWorkers = Integer.parseInt(args[2]);
+		workersRatio = Integer.parseInt(args[2]);
 
 		// initialize all needed AWS services for the assignment
 		initAmazonAwsServices();
@@ -58,7 +58,7 @@ public class LocalApp {
 		uploadInputFileToS3(inputFileName);
 
 		// send a "start" message to Manager through SQS
-		sendMessageToManager(id + "\t" + numOfWorkers);
+		sendMessageToManager(id + "\t" + workersRatio);
 
 		// initialize the manager node if it does not exist yet
 		startManagerNode("t2.micro", "ami-1ecae776", "Ass1SecurityGroup");
@@ -166,8 +166,8 @@ public class LocalApp {
 
 		for (Reservation reservation : result)
 			for (Instance instance : reservation.getInstances())
-				if (instance.getState().getCode() == 16 // running
-						|| instance.getState().getCode() == 0) // pending
+				if (instance.getState().getCode() == RUNNING// running
+						|| instance.getState().getCode() == PENDING) // pending
 					for (Tag tag : instance.getTags())
 						if (tag.getValue().equals("manager")) {
 							System.out

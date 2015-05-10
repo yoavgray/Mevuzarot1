@@ -1,5 +1,4 @@
-import java.io.File;
-import java.io.IOException;
+import java.io.*;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
@@ -8,11 +7,12 @@ import java.util.UUID;
 
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.auth.profile.ProfileCredentialsProvider;
-import com.amazonaws.services.sqs.model.GetQueueUrlResult;
+import com.amazonaws.services.s3.model.GetObjectRequest;
+import com.amazonaws.services.s3.model.S3Object;
+import com.amazonaws.services.sqs.model.*;
 import org.apache.commons.codec.binary.Base64;
 
 import com.amazonaws.auth.AWSCredentials;
-import com.amazonaws.auth.PropertiesCredentials;
 import com.amazonaws.services.cloudfront.model.InvalidArgumentException;
 import com.amazonaws.services.ec2.AmazonEC2;
 import com.amazonaws.services.ec2.AmazonEC2Client;
@@ -28,64 +28,123 @@ import com.amazonaws.services.s3.AmazonS3Client;
 import com.amazonaws.services.s3.model.PutObjectRequest;
 import com.amazonaws.services.sqs.AmazonSQS;
 import com.amazonaws.services.sqs.AmazonSQSClient;
-import com.amazonaws.services.sqs.model.CreateQueueRequest;
-import com.amazonaws.services.sqs.model.SendMessageRequest;
 
 public class LocalApp {
-	private static final int RUNNING = 16;
-	private static final int PENDING = 0;
-	public static final String managerQueue = "ManagerQueue";
-	public static final String localAppQueue = "LocalAppQueue";
+    private static final int RUNNING = 16;
+    private static final int PENDING = 0;
+    public static final String managerQueue = "ManagerQueue";
+    public static final String localAppQueue = "LocalAppQueue";
+    public static final String INSTANCE_ID = "t2.micro";
+    public static final String AMI_ID = "ami-1ecae776";
+    public static final String SECURITY_GROUP = "Ass1SecurityGroup";
+    public static final String KEY_PAIR_NAME = "yoaveliran";
+    public static AmazonEC2 ec2Client;
+    public static AmazonS3 s3Client;
+    public static AmazonSQS sqsClient;
+    public static String bucketName;
+    public static int workersRatio;
+    public static String htmlFile;
 
-	public static AmazonEC2 ec2Client;
-	public static AmazonS3 s3Client;
-	public static AmazonSQS sqsClient;
-	public static String bucketName, id;
-	public static String instanceType;
-	public static String amiID;
-	public static String securityGroup;
-	public static int workersRatio;
+    public static void main(String[] args) throws Exception {
+        if (args == null || args.length < 3 || args.length > 4)
+            throw new InvalidArgumentException("Invalid arguments");
 
-	public static void main(String[] args) throws Exception {
-		if (args == null || args.length < 3 || args.length > 4)
-			throw new InvalidArgumentException("Invalid arguments");
+        String inputFileName = args[0];
+        String outputFileName = args[1];
+        workersRatio = Integer.parseInt(args[2]);
+        htmlFile = "<HTML>\n<HEAD>\n</HEAD>\n<BODY>\n{dynamicPart}\n</BODY>\n</HTML>\n";
 
-		String inputFileName = args[0];
-		String outputFileName = args[1];
-		workersRatio = Integer.parseInt(args[2]);
+        // initialize all needed AWS services for the assignment
+        initAmazonAwsServices();
 
-		// initialize all needed AWS services for the assignment
-		initAmazonAwsServices();
+        // upload input file to S3
+        uploadInputFileToS3(inputFileName);
 
-		// upload input file to S3
-		uploadInputFileToS3(inputFileName);
+        //if not exists, creates a managerQueue & localAppQueue.
+        startQueue(managerQueue);
+        startQueue(localAppQueue);
 
-		// send a "start" message to Manager through SQS
-		sendMessageToManager(bucketName + "\t" + inputFileName + "\t"+ workersRatio);
+        // send a "start" message to Manager through SQS
+        sendMessageToManager(bucketName + "\t" + inputFileName + "\t" + workersRatio);
 
-		//if not exists, creates a managerQueue & localAppQueue.
-		startQueue(managerQueue);
-		startQueue(localAppQueue);
+        // initialize the manager node if it does not exist yet
+        startManagerNode(INSTANCE_ID, AMI_ID, SECURITY_GROUP);
 
-		// initialize the manager node if it does not exist yet
-		startManagerNode("t2.micro", "ami-1ecae776", "Ass1SecurityGroup");
+        // receive the "done" message from the Manager
+        boolean isLocalAppDone = false;
+        while (!isLocalAppDone) {
+            isLocalAppDone = recieveMessageFromManager();
+        }
+        System.out.println("LocalApp " + bucketName + " is done!");
+    }
 
-		// recieve the "done" message from the Manager
-		// String messageFromManager = recieveMessageFromManager();
+    private static boolean recieveMessageFromManager() throws IOException {
+        // output file should like like this:
+        // bucketName\n
+        // workerId + '\t' + oldUrl1 + '\t' + newUrl1
+        // workerId + '\t' + oldUrl2 + '\t' + newUrl2
+        // ......
+        // ......
 
-	}
+        //Parse message from Manager
+        ReceiveMessageRequest receiveMessageRequest = new ReceiveMessageRequest(
+                localAppQueue);
+        List<Message> messages = sqsClient
+                .receiveMessage(receiveMessageRequest).getMessages();
+        String messageReceiptHandle;
 
-	private static String recieveMessageFromManager() {
-		// TODO Auto-generated method stub
-		return null;
-	}
+        for (Message message : messages) {
+            if (message != null) {
+                messageReceiptHandle = message.getReceiptHandle();
+                String msg = message.getBody();
+                String[] info = msg.split("\t");
+
+                // if its the same bucketName, then it was addressed to this LocalApp!
+                if (info[0].equals(bucketName)) {
+                    String fileName = info[1];
+                    System.out.println("Downloading summary file from S3.\n");
+                    StringBuilder result = new StringBuilder(10000);
+                    BufferedReader br = downloadFileFromS3(bucketName, fileName);
+
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        String[] parsedLine = line.split("\t");
+                        if (parsedLine.length == 2) {
+                            result.append("<a href=\"").append(parsedLine[0]).append("\"><img src=\"").append(parsedLine[1]).append("\" width=\"50\" height=\"50\"></a>\n");
+                        } else {
+                            System.out.println("Problem with output file. Check structure!");
+                        }
+                    }
+
+                    String finalHtmlFile = htmlFile.replace("{dynamicPart}", result.toString());
+
+                    String htmlFileName = "htmlOutputFile.html";
+
+                    PrintWriter writer = new PrintWriter(htmlFileName, "UTF-8");
+                    writer.println(finalHtmlFile);
+                    writer.close();
+
+                    System.out.println("HTML file ready for LocalApp " + bucketName);
+
+                    // Delete the message from the queue
+                    System.out
+                            .println("Done reading outputFile from manager. Deleting the message.\n");
+                    sqsClient.deleteMessage(new DeleteMessageRequest(localAppQueue,
+                            messageReceiptHandle));
+
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
 
 	private static void sendMessageToManager(String message) {
 
 		System.out.println("Sending manager the opening message.\n");
 
-
-		GetQueueUrlResult queueUrl=  sqsClient.getQueueUrl(managerQueue);
+		GetQueueUrlResult queueUrl = sqsClient.getQueueUrl(managerQueue);
 
 		sqsClient.sendMessage(new SendMessageRequest(queueUrl.getQueueUrl(), message));
 	}
@@ -98,6 +157,26 @@ public class LocalApp {
 		System.out.println("File uploaded.");
 	}
 
+    /**
+     * Download the input file from S3 after receiving the opening message from
+     * LocalApp
+     *
+     * @param bucketName
+     *            the application bucket to download from
+     * @param fileName
+     * 			  filename to download from S3
+     * @return a BufferedReader instance with the input file's data
+     */
+    private static BufferedReader downloadFileFromS3(String bucketName, String fileName) {
+        System.out.println("Downloading " + fileName + " from S3");
+        S3Object s3Object = s3Client.getObject(new GetObjectRequest(bucketName,
+        fileName));
+        BufferedReader reader = new BufferedReader(new InputStreamReader(
+        s3Object.getObjectContent()));
+        s3Client.deleteObject(bucketName, fileName);
+        return reader;
+    }
+
 	private static void startManagerNode(String instanceType, String amiID,
 			String securityGroup) {
 		if (!isManagerNodeExists()) {
@@ -106,9 +185,9 @@ public class LocalApp {
 			RunInstancesRequest riReq = new RunInstancesRequest();
 			riReq.setInstanceType(instanceType);
 			riReq.setImageId(amiID);
-			riReq.setKeyName("yoaveliran");
-			riReq.setMinCount(Integer.valueOf(1));
-			riReq.setMaxCount(Integer.valueOf(1));
+			riReq.setKeyName(KEY_PAIR_NAME);
+			riReq.setMinCount(1);
+			riReq.setMaxCount(1);
 			riReq.withSecurityGroupIds(securityGroup);
 			// riReq.setUserData(getUserDataScript());
 			RunInstancesResult riRes = ec2Client.runInstances(riReq);
@@ -129,14 +208,13 @@ public class LocalApp {
 	private static String getUserDataScript() {
 		ArrayList<String> lines = new ArrayList<String>();
 		lines.add("#! /bin/bash -ex");
-		// lines.add("wget https://s3.amazonaws.com/akiaj73yligsqbwt2fdq/manager.zip");
-		// lines.add("unzip -P cHEdra3e manager.zip");
+		lines.add("wget https://s3.amazonaws.com/akiaj73yligsqbwt2fdq/manager.zip");
+		lines.add("unzip -P password manager.zip");
 		lines.add("wget https://s3.amazonaws.com/akiaj4lyabwjftnf3jfa/manager.jar");
 		lines.add("java -jar manager.jar");
 
-		String str = new String(Base64.encodeBase64(join(lines, "\n")
+		return new String(Base64.encodeBase64(join(lines, "\n")
 				.getBytes()));
-		return str;
 	}
 
 	static String join(Collection<String> s, String delimiter) {
@@ -180,7 +258,7 @@ public class LocalApp {
 	 * starts necessary AmazonAWS services for this assignment
 	 */
 	private static void initAmazonAwsServices() {
-		AWSCredentials credentials = null;
+		AWSCredentials credentials;
 		try {
 			credentials = new ProfileCredentialsProvider().getCredentials();
 //			credentials = new PropertiesCredentials(
@@ -189,7 +267,7 @@ public class LocalApp {
 			ec2Client = new AmazonEC2Client(credentials);
 			s3Client = new AmazonS3Client(credentials);
 			sqsClient = new AmazonSQSClient(credentials);
-			bucketName = credentials.getAWSAccessKeyId().toLowerCase();
+			bucketName = UUID.randomUUID().toString();
 		} catch (Exception e) {
 			throw new AmazonClientException(
 					"Cannot load the credentials from the credential profiles file. " +
@@ -200,7 +278,6 @@ public class LocalApp {
 		if (!s3Client.doesBucketExist(bucketName)) {
 			s3Client.createBucket(bucketName);
 		}
-		id = UUID.randomUUID().toString();
 
 		System.out.println("Initialized EC2, S3, SQS and created buckets "
 				+ bucketName + " and results");

@@ -9,6 +9,7 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.UUID;
 
 import javax.imageio.ImageIO;
 
@@ -26,6 +27,7 @@ import com.amazonaws.services.ec2.model.Tag;
 import com.amazonaws.services.ec2.model.TerminateInstancesRequest;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.model.GeneratePresignedUrlRequest;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.PutObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
@@ -49,11 +51,13 @@ public class Worker {
 	public static AmazonSQS sqsClient;
 	public static String id;
 	public static String bucketName;
-	public static String workerId;
+	public static StringBuilder summaryFile;
 	public static ArrayList<String> failedUrls;
 
 	public static void main(String[] args) throws IOException {
 		doneWork = false;
+
+		summaryFile = new StringBuilder("Summary file:\n");
 
 		initAmazonAwsServices();
 
@@ -61,45 +65,43 @@ public class Worker {
 			String[] body;
 			String url;
 
-			System.out.println("Receiving messages from Manager.\n");
 			ReceiveMessageRequest receiveMessageRequest = new ReceiveMessageRequest(
 					workerQueue);
 			List<Message> messages = sqsClient.receiveMessage(
 					receiveMessageRequest).getMessages();
 			if (!messages.isEmpty()) {
-				String messageRecieptHandle = null;
+				String messageReceiptHandle;
 				for (Message message : messages) {
-					messageRecieptHandle = message.getReceiptHandle();
-					url = message.getBody();
+					messageReceiptHandle = message.getReceiptHandle();
+					body = message.getBody().split("\t");
+					bucketName = body[0];
+					url = body[1];
 					System.out.println(url);
 
 					String fileToUpload = resizeImageFromUrl(new URL(url));
 					if (fileToUpload == null) {
 						System.out.println("Failed processing " + url + ". Continuing...");
 						sqsClient.deleteMessage(new DeleteMessageRequest(
-								workerQueue, messageRecieptHandle));
+								workerQueue, messageReceiptHandle));
 						continue;
 					}
 					File f = new File(fileToUpload);
 					// Upload the file
 					s3Client.putObject(new PutObjectRequest(bucketName, f.getName(), f));
-					String newUrl = "https://s3.amazonaws.com/" + bucketName
-							+ "/" + fileToUpload;
-					f.delete();
-					System.out.println("File uploaded and deleted.");
+
+                    //create a url to access the object
+                    GeneratePresignedUrlRequest generatePresignedUrlRequest =  new GeneratePresignedUrlRequest(bucketName, fileToUpload);
+                    String newUrl = s3Client.generatePresignedUrl(generatePresignedUrlRequest).toString();
+
+                    f.delete();
+                    System.out.println("File uploaded and deleted.");
 
 					sqsClient.sendMessage(new SendMessageRequest(resultsQueue,
-							url + "\t" + newUrl));
+							bucketName + "\t" + url + "\t" + newUrl));
 
 					sqsClient.deleteMessage(new DeleteMessageRequest(
-							workerQueue, messageRecieptHandle));
+							workerQueue, messageReceiptHandle));
 				}
-			} else {
-				System.out
-						.println("No more messages for worker! Terminating :)");
-				//TODO return this: TerminateWorker();
-				
-//				doneWork = true;
 			}
 		}
 
@@ -115,7 +117,7 @@ public class Worker {
 					for (Tag tag : instance.getTags()) {
 						// check if the instance has a manager tag
 						if (tag.getValue().equals("worker")) {
-							List<String> instanceIds = new ArrayList<String>();
+							List<String> instanceIds = new ArrayList<>();
 							instanceIds.add(instance.getInstanceId());
 							ec2Client
 									.terminateInstances(new TerminateInstancesRequest(
@@ -133,9 +135,8 @@ public class Worker {
 		ec2Client = new AmazonEC2Client(credentials);
 		s3Client = new AmazonS3Client(credentials);
 		sqsClient = new AmazonSQSClient(credentials);
-		bucketName = credentials.getAWSAccessKeyId().toLowerCase();
-		failedUrls = new ArrayList<String>();
-		id = new Instance().getInstanceId() == null ? "kaki" : new Instance().getInstanceId();
+		failedUrls = new ArrayList<>();
+		id = UUID.randomUUID().toString();
 
 		System.out.println("Done initializing EC2, S3 & SQS");
 	}
@@ -148,15 +149,13 @@ public class Worker {
 					: originalImage.getType();
 			BufferedImage result = getResizedImage(originalImage, type);
 
-			String filePath = "resizedImage_" + id + "_" + numOfImageProcessed
+			String filePath = id + "_" + numOfImageProcessed
 					+ ".jpg";
 			File file = new File(filePath);
-			ImageIO.write((RenderedImage) result, "jpg", file);
+			ImageIO.write(result, "jpg", file);
 			numOfImageProcessed++;
 			return filePath;
-		} catch (IOException e) {
-			failedUrls.add(imageUrl.toString());
-		} catch (NullPointerException e) {
+		} catch (IOException | NullPointerException e) {
 			failedUrls.add(imageUrl.toString());
 		}
 		return null;

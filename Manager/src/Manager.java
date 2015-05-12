@@ -1,10 +1,8 @@
 import java.io.*;
-import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
 
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
@@ -22,61 +20,64 @@ import com.amazonaws.services.ec2.model.Tag;
 import com.amazonaws.services.ec2.model.TerminateInstancesRequest;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
-import com.amazonaws.services.s3.model.GetObjectRequest;
-import com.amazonaws.services.s3.model.PutObjectRequest;
-import com.amazonaws.services.s3.model.S3Object;
+import com.amazonaws.services.s3.model.*;
 import com.amazonaws.services.sqs.AmazonSQS;
 import com.amazonaws.services.sqs.AmazonSQSClient;
-import com.amazonaws.services.sqs.model.CreateQueueRequest;
-import com.amazonaws.services.sqs.model.DeleteMessageRequest;
-import com.amazonaws.services.sqs.model.Message;
-import com.amazonaws.services.sqs.model.ReceiveMessageRequest;
-import com.amazonaws.services.sqs.model.SendMessageRequest;
+import com.amazonaws.services.sqs.model.*;
 
 public class Manager {
-	public static final String localAppQueue = "LocalAppQueue";
-	public static final String workersQueue = "WorkersQueue";
-	public static final String resultsQueue = "ResultsQueue";
-	public static final String managerQueue = "ManagerQueue";
+	public static final String LOCAL_APP_QUEUE = "LocalAppQueue";
+	public static final String WORKERS_QUEUE = "WorkersQueue";
+	public static final String RESULTS_QUEUE = "ResultsQueue";
+	public static final String MANAGER_QUEUE = "ManagerQueue";
 	public static final String TERMINATE = "terminate";
     public static final String INSTANCE_TYPE = "t2.micro";
     public static final String AMI_ID = "ami-1ecae776";
     public static final String SECURITY_GROUP = "Ass1SecurityGroup";
     public static final String KEY_PAIR_NAME = "yoaveliran";
-    public static ConcurrentHashMap<String,Integer> localAppJobsCounter;
-    public static ConcurrentHashMap<String,StringBuilder> localAppSummaryFiles;
-    public static String bucketName;
-    public static boolean isTerminated;
+    public static final String STATS_BUCKET = "statisticsmrbrown";
+    public static HashMap<String,Integer> localAppJobsCounter;
+    public static HashMap<String,StringBuilder> localAppSummaryFiles;
 	public static AmazonEC2 ec2Client;
 	public static AmazonS3 s3Client;
 	public static AmazonSQS sqsClient;
+    public static String outputFileName;
+    public static boolean isTerminated;
+    public static boolean isManagerDone;
     private static int numOfWorkersCreated;
 
 	public static void main(String[] args) throws IOException {
 		isTerminated = false;
-		// initialize all needed AWS services for the assignment
-		initAmazonAwsServices();
-        numOfWorkersCreated = 0;
-        localAppJobsCounter = new ConcurrentHashMap<>();
-        localAppSummaryFiles = new ConcurrentHashMap<>();
+        isManagerDone = false;
+		numOfWorkersCreated = 0;
+        localAppJobsCounter = new HashMap<>();
+        localAppSummaryFiles = new HashMap<>();
 
-		// start WorkersQueue and ResultsQueue
-		startQueue(workersQueue);
-		startQueue(resultsQueue);
+        // initialize all needed AWS services for the assignment
+        initAmazonAwsServices();
+
+        // start WorkersQueue and ResultsQueue
+		startQueue(WORKERS_QUEUE);
+        startQueue(RESULTS_QUEUE);
 
         Thread t = new Thread(new RunnableWorkAssigner());
         t.start();
 
-        System.out.println("1");
 		try {
-			while (!isTerminated) {
+			while (!isManagerDone) {
                 processWorkersMessages();
 			}
 
-        System.out.println("workers job is done. terminating manager instance");
-        //check there is not duplications in results file
-        //termination upon argument
-        cleanUpAndSendResponse();
+            sendPoisonToWorkers();
+            boolean areWorkersReadyToDie = false;
+            while (!areWorkersReadyToDie) {
+                areWorkersReadyToDie = waitForWorkersResponse();
+            }
+
+            TerminateAllWorkers();
+            System.out.println("workers job is done. terminating manager instance");
+            deleteAllSqsQueues();
+            TerminateManager();
 
 		} catch (AmazonServiceException ase) {
 			System.out.println("Caught Exception: " + ase.getMessage());
@@ -91,7 +92,40 @@ public class Manager {
 
     }
 
-// starts a new Queue if not exists already
+    private static boolean waitForWorkersResponse() {
+        ReceiveMessageRequest receiveMessageRequest = new ReceiveMessageRequest(
+                MANAGER_QUEUE);
+        List<Message> messages = sqsClient.receiveMessage(
+                receiveMessageRequest).getMessages();
+
+        String messageReceiptHandle;
+        for (Message message : messages) {
+            messageReceiptHandle = message.getReceiptHandle();
+            new ChangeMessageVisibilityRequest(sqsClient.getQueueUrl(MANAGER_QUEUE).toString(), messageReceiptHandle, 5);
+            System.out.println("WaitingForWorkersResponse: Got " + message.getBody());
+            if (message.getBody().equals(TERMINATE)) {
+                numOfWorkersCreated--;
+
+                if (numOfWorkersCreated == 0) {
+                    return true;
+                }
+            }
+
+            sqsClient.deleteMessage(new DeleteMessageRequest(
+                    MANAGER_QUEUE, messageReceiptHandle));
+        }
+        return false;
+    }
+
+    private static void sendPoisonToWorkers() {
+        for (int i=0; i<numOfWorkersCreated; i++) {
+            System.out.println("Sending poison to worker #" + i);
+            sqsClient.sendMessage(new SendMessageRequest(
+                    WORKERS_QUEUE, TERMINATE));
+        }
+    }
+
+    // starts a new Queue if not exists already
 	private static void startQueue(String queueName) {
 		List<String> listQueuesUrls = sqsClient.listQueues(queueName)
 				.getQueueUrls();
@@ -102,15 +136,14 @@ public class Manager {
 		}
 	}
 
-	private static void cleanUpAndSendResponse() {
-		TerminateManager();
-		
-		//sqsClient.deleteQueue(new DeleteQueueRequest(managerQueue));
-		//sqsClient.deleteQueue(new DeleteQueueRequest(workersQueue));
-		//sqsClient.deleteQueue(new DeleteQueueRequest(resultsQueue));
-	}
+    private static void deleteAllSqsQueues() {
+        sqsClient.deleteQueue(new DeleteQueueRequest(MANAGER_QUEUE));
+        sqsClient.deleteQueue(new DeleteQueueRequest(WORKERS_QUEUE));
+        sqsClient.deleteQueue(new DeleteQueueRequest(RESULTS_QUEUE));
+        sqsClient.deleteQueue(new DeleteQueueRequest(LOCAL_APP_QUEUE));
+    }
 
-	private static void TerminateManager() {
+    private static void TerminateManager() {
 		DescribeInstancesRequest req = new DescribeInstancesRequest();
 		List<Reservation> result = ec2Client.describeInstances(req)
 				.getReservations();
@@ -136,7 +169,7 @@ public class Manager {
         String[] body;
 
         ReceiveMessageRequest receiveMessageRequest = new ReceiveMessageRequest(
-                resultsQueue);
+                RESULTS_QUEUE);
         List<Message> messages = sqsClient.receiveMessage(
                 receiveMessageRequest).getMessages();
         if (!messages.isEmpty()) {
@@ -144,36 +177,51 @@ public class Manager {
             for (Message message : messages) {
                 messageReceiptHandle = message.getReceiptHandle();
                 body = message.getBody().split("\t");
-                bucketName = body[0];
-                String oldUrl = body[1];
-                String newUrl = body[2];
-                String tmpString = oldUrl + "\t" + newUrl + "\n";
-                localAppSummaryFiles.put(bucketName,localAppSummaryFiles.get(bucketName).append(tmpString));
-                int newVal = localAppJobsCounter.get(bucketName) - 1;
-                localAppJobsCounter.put(bucketName, newVal);
+                String bucketName;
+                int newVal = -1;
+                if (body.length == 3) {
+                    bucketName = body[0];
+                    String oldUrl = body[1];
+                    String newUrl = body[2];
+                    String tmpString = oldUrl + "\t" + newUrl + "\n";
+
+                    if (localAppSummaryFiles.get(bucketName) != null) {
+                        localAppSummaryFiles.put(bucketName, localAppSummaryFiles.get(bucketName).append(tmpString));
+                        newVal = localAppJobsCounter.get(bucketName) - 1;
+                        System.out.println("1 job less for " + bucketName + ". still " + newVal + " to go!");
+                        localAppJobsCounter.put(bucketName, newVal);
+                    }
+                } else {
+                    bucketName = body[0];
+                    if (localAppSummaryFiles.get(bucketName) != null) {
+                        newVal = localAppJobsCounter.get(bucketName) - 1;
+                        System.out.println("1 job less (failed) for " + bucketName + ". still " + newVal + " to go!");
+                        localAppJobsCounter.put(bucketName, newVal);
+                    }
+                }
 
                 sqsClient.deleteMessage(new DeleteMessageRequest(
-                        resultsQueue, messageReceiptHandle));
+                        RESULTS_QUEUE, messageReceiptHandle));
 
                 // job is done?
                 if (newVal == 0) {
-                    String fileName = "outputFile.txt";
                     try {
-                        PrintWriter writer = new PrintWriter(fileName, "UTF-8");
+                        PrintWriter writer = new PrintWriter(outputFileName, "UTF-8");
                         String summaryFile = localAppSummaryFiles.get(bucketName).toString();
                         writer.println(summaryFile);
                         writer.close();
-                        uploadFileToS3(fileName);
+                        uploadFileToS3(bucketName, outputFileName);
 
-                        String msgForLocalApp = bucketName + "\t" + fileName;
+                        String msgForLocalApp = bucketName + "\t" + outputFileName;
                         sqsClient.sendMessage(new SendMessageRequest(
-                                localAppQueue, msgForLocalApp));
-
+                                LOCAL_APP_QUEUE, msgForLocalApp));
+                        System.out.println("job for " + bucketName + " is over!");
                         localAppJobsCounter.remove(bucketName);
                         localAppSummaryFiles.remove(bucketName);
                         // means all workers are done
                         if (localAppSummaryFiles.size() == 0) {
-                            TerminateAllWorkers();
+                            //if a terminate msg has arrived, now is the time to go
+                            isManagerDone = isTerminated;
                         }
                     } catch (FileNotFoundException | UnsupportedEncodingException e) {
                         e.printStackTrace();
@@ -205,7 +253,7 @@ public class Manager {
         }
     }
 
-    private static void uploadFileToS3(String fileToUpload) {
+    private static void uploadFileToS3(String bucketName, String fileToUpload) {
         File f = new File(fileToUpload);
         PutObjectRequest por = new PutObjectRequest(bucketName, fileToUpload, f);
         // Upload the file
@@ -213,10 +261,10 @@ public class Manager {
         System.out.println("File uploaded.");
     }
 
-    private static void processMessage(String bucketName, String fileName, int ratio) throws IOException {
+    private static void processMessage(String thisBucketName, String fileName, int ratio) throws IOException {
 
         //Download the input file from S3 and parse it
-        BufferedReader urlFile = downloadFileFromS3(bucketName, fileName);
+        BufferedReader urlFile = downloadFileFromS3(thisBucketName, fileName);
 
         String line;
         List<String> lines = new ArrayList<>();
@@ -224,14 +272,15 @@ public class Manager {
             lines.add(line);
         }
 
-        localAppJobsCounter.put(bucketName,lines.size());
+        localAppJobsCounter.put(thisBucketName,lines.size());
+        System.out.println("Job " + thisBucketName + " needs " + localAppJobsCounter.get(thisBucketName).toString() + " urls");
         int numOfWorkersNeededForJob = lines.size() / ratio + 1;
         // create the needed amount of workers
         createWorkersIfNeeded(numOfWorkersNeededForJob);
 
         System.out.println("Starting to send work to workers...");
         for (String url : lines) {
-            sqsClient.sendMessage(new SendMessageRequest("WorkersQueue", bucketName + "\t" + url));
+            sqsClient.sendMessage(new SendMessageRequest("WorkersQueue", thisBucketName + "\t" + url));
         }
     }
 
@@ -241,7 +290,6 @@ public class Manager {
             for (int i=0; i<k; i++) {
                 CreateNewWorkerInstance(INSTANCE_TYPE, AMI_ID, SECURITY_GROUP);
             }
-            System.out.println("Created " + k + " workers to handle " + bucketName + " job." );
         }
     }
 
@@ -296,37 +344,46 @@ public class Manager {
 		ec2Client = new AmazonEC2Client(credentials);
 		s3Client = new AmazonS3Client(credentials);
 		sqsClient = new AmazonSQSClient(credentials);
+
+        if (!s3Client.doesBucketExist(STATS_BUCKET)) {
+            s3Client.createBucket(STATS_BUCKET);
+        }
 	}
 
     private static void listenToManagerQueueAndAssignWork() {
         ReceiveMessageRequest receiveMessageRequest = new ReceiveMessageRequest(
-                managerQueue);
+                MANAGER_QUEUE);
         List<Message> messages = sqsClient
                 .receiveMessage(receiveMessageRequest).getMessages();
         String messageRecieptHandle;
 
         for (Message message : messages) {
             if (message != null ) {
+                String thisBucketName;
                 messageRecieptHandle = message.getReceiptHandle();
                 String msg = message.getBody();
                 String[] body = msg.split("\t");
-                if (body.length >= 3) {
-                    bucketName = body[0];
+                if (body.length >= 4) {
+                    thisBucketName = body[0];
                     String fileName = body[1];
-                    int ratio = Integer.parseInt(body[2]);
-                    localAppSummaryFiles.put(bucketName,new StringBuilder(5000));
+                    outputFileName = body[2];
+                    int ratio = Integer.parseInt(body[3]);
+
+                    if (body.length == 5 && body[4].equals(TERMINATE)) {
+                        isTerminated = true;
+                    }
+
+                    localAppSummaryFiles.put(thisBucketName,new StringBuilder(5000));
+
                     //create a new thread to download input file from S3 and assign work to workers
-                    Thread t = new Thread(new LocalAppJobHandler(bucketName, fileName, ratio));
+                    Thread t = new Thread(new LocalAppJobHandler(thisBucketName, fileName, ratio));
                     t.start();
 
                     // Delete the message from the queue
                     System.out
-                            .println("Done receiving a task from LocalApp:" + bucketName + ". Deleting the message and waiting for the next one.\n");
-                    sqsClient.deleteMessage(new DeleteMessageRequest(managerQueue,
+                            .println("Done receiving a task from LocalApp:" + thisBucketName + ". Deleting the message and waiting for the next one.\n");
+                    sqsClient.deleteMessage(new DeleteMessageRequest(MANAGER_QUEUE,
                             messageRecieptHandle));
-                }
-                if (body.length > 3 && body[3] != null) {
-                    isTerminated = true;
                 }
             }
         }

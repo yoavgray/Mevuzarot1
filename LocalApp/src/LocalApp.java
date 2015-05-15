@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.UUID;
 
 import com.amazonaws.AmazonClientException;
+import com.amazonaws.auth.PropertiesCredentials;
 import com.amazonaws.auth.profile.ProfileCredentialsProvider;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
@@ -136,9 +137,6 @@ public class LocalApp {
                     // Delete the message from the queue
                     System.out
                             .println("Done reading outputFile from manager. Deleting the message.\n");
-                    sqsClient.deleteMessage(new DeleteMessageRequest(LOCAL_APP_QUEUE,
-                            messageReceiptHandle));
-
                     return true;
                 }
             }
@@ -196,7 +194,7 @@ public class LocalApp {
 			riReq.setMinCount(1);
 			riReq.setMaxCount(1);
 			riReq.withSecurityGroupIds(securityGroup);
-			// riReq.setUserData(getUserDataScript());
+			riReq.setUserData(getUserDataScript());
 			RunInstancesResult riRes = ec2Client.runInstances(riReq);
 			List<String> instanceIdList = new ArrayList<>();
 			List<Tag> tagsList = new ArrayList<>();
@@ -215,10 +213,9 @@ public class LocalApp {
 	private static String getUserDataScript() {
 		ArrayList<String> lines = new ArrayList<>();
 		lines.add("#! /bin/bash -ex");
-		lines.add("wget https://s3.amazonaws.com/akiaj73yligsqbwt2fdq/manager.zip");
-		lines.add("unzip -P password manager.zip");
-		lines.add("wget https://s3.amazonaws.com/akiaj4lyabwjftnf3jfa/manager.jar");
-		lines.add("java -jar manager.jar");
+        lines.add("wget https://s3.amazonaws.com/initialjarfilesforassignment1/Manager.zip");
+        lines.add("unzip -P bubA2003 Manager.zip");
+        lines.add("java -jar Manager.jar");
 
 		return new String(Base64.encodeBase64(join(lines, "\n")
 				.getBytes()));
@@ -235,7 +232,6 @@ public class LocalApp {
 			builder.append(delimiter);
 		}
 		return builder.toString();
-
 	}
 
 	/**
@@ -265,10 +261,8 @@ public class LocalApp {
 	 * starts necessary AmazonAWS services for this assignment
 	 */
 	private static void initAmazonAwsServices() {
-		AWSCredentials credentials;
 		try {
-			credentials = new ProfileCredentialsProvider().getCredentials();
-
+            AWSCredentials credentials = new PropertiesCredentials(LocalApp.class.getResourceAsStream("AwsCredentials.properties"));
 
 			ec2Client = new AmazonEC2Client(credentials);
 			s3Client = new AmazonS3Client(credentials);

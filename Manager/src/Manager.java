@@ -1,13 +1,10 @@
 import java.io.*;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
+import java.util.*;
 
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
 import com.amazonaws.auth.AWSCredentials;
-import com.amazonaws.auth.profile.ProfileCredentialsProvider;
+import com.amazonaws.auth.PropertiesCredentials;
 import com.amazonaws.services.ec2.AmazonEC2;
 import com.amazonaws.services.ec2.AmazonEC2Client;
 import com.amazonaws.services.ec2.model.CreateTagsRequest;
@@ -24,6 +21,7 @@ import com.amazonaws.services.s3.model.*;
 import com.amazonaws.services.sqs.AmazonSQS;
 import com.amazonaws.services.sqs.AmazonSQSClient;
 import com.amazonaws.services.sqs.model.*;
+import org.apache.commons.codec.binary.Base64;
 
 public class Manager {
 	public static final String LOCAL_APP_QUEUE = "LocalAppQueue";
@@ -34,7 +32,7 @@ public class Manager {
     public static final String INSTANCE_TYPE = "t2.micro";
     public static final String AMI_ID = "ami-1ecae776";
     public static final String SECURITY_GROUP = "Ass1SecurityGroup";
-    public static final String KEY_PAIR_NAME = "yoaveliran";
+    public static final String KEY_PAIR_NAME = "assignment1";
     public static final String STATS_BUCKET = "statisticsmrbrown";
     public static HashMap<String,Integer> localAppJobsCounter;
     public static HashMap<String,StringBuilder> localAppSummaryFiles;
@@ -140,7 +138,6 @@ public class Manager {
         sqsClient.deleteQueue(new DeleteQueueRequest(MANAGER_QUEUE));
         sqsClient.deleteQueue(new DeleteQueueRequest(WORKERS_QUEUE));
         sqsClient.deleteQueue(new DeleteQueueRequest(RESULTS_QUEUE));
-        sqsClient.deleteQueue(new DeleteQueueRequest(LOCAL_APP_QUEUE));
     }
 
     private static void TerminateManager() {
@@ -302,7 +299,7 @@ public class Manager {
         riReq.setMinCount(1);
         riReq.setMaxCount(1);
         riReq.withSecurityGroupIds(securityGroup);
-        // riReq.setUserData(getUserDataScript());
+        riReq.setUserData(getUserDataScript());
         RunInstancesResult riRes = ec2Client.runInstances(riReq);
         setNumOfWorkersCreated(getNumOfWorkersCreated() + 1);
         List<String> instanceIdList = new ArrayList<>();
@@ -315,6 +312,30 @@ public class Manager {
 
         ec2Client.createTags(new CreateTagsRequest(instanceIdList, tagsList));
         System.out.println("Created another Worker Instance running...");
+    }
+
+    private static String getUserDataScript() {
+        ArrayList<String> lines = new ArrayList<>();
+        lines.add("#! /bin/bash -ex");
+        lines.add("wget https://s3.amazonaws.com/initialjarfilesforassignment1/Worker.zip");
+        lines.add("unzip -P bubA2003 Worker.zip");
+        lines.add("java -jar Worker.jar");
+
+        return new String(Base64.encodeBase64(join(lines, "\n")
+                .getBytes()));
+    }
+
+    static String join(Collection<String> s, String delimiter) {
+        StringBuilder builder = new StringBuilder();
+        Iterator<String> iter = s.iterator();
+        while (iter.hasNext()) {
+            builder.append(iter.next());
+            if (!iter.hasNext()) {
+                break;
+            }
+            builder.append(delimiter);
+        }
+        return builder.toString();
     }
 
 	/**
@@ -340,7 +361,7 @@ public class Manager {
 	private static void initAmazonAwsServices() throws IOException {
 		// Set AWS credentials and create services
 
-		AWSCredentials credentials = new ProfileCredentialsProvider().getCredentials();
+        AWSCredentials credentials = new PropertiesCredentials(Manager.class.getResourceAsStream("AwsCredentials.properties"));
 		ec2Client = new AmazonEC2Client(credentials);
 		s3Client = new AmazonS3Client(credentials);
 		sqsClient = new AmazonSQSClient(credentials);

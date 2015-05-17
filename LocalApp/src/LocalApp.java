@@ -84,7 +84,14 @@ public class LocalApp {
             isLocalAppDone = recieveMessageFromManager();
         }
         System.out.println("LocalApp " + bucketName + " is done! Finishing...");
-    }
+
+		//delete last queue upon termination
+		if (args.length == 4 && args[3].equals(TERMINATE)) {
+			sqsClient.deleteQueue(new DeleteQueueRequest(LOCAL_APP_QUEUE));
+		}
+
+
+	}
 
     private static boolean recieveMessageFromManager() throws IOException {
         // output file should like like this:
@@ -135,8 +142,13 @@ public class LocalApp {
                     System.out.println("HTML file ready for LocalApp " + bucketName);
 
                     // Delete the message from the queue
+					sqsClient.deleteMessage(new DeleteMessageRequest(
+							LOCAL_APP_QUEUE, messageReceiptHandle));
+
                     System.out
                             .println("Done reading outputFile from manager. Deleting the message.\n");
+
+
                     return true;
                 }
             }

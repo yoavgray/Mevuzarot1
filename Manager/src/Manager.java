@@ -103,7 +103,6 @@ public class Manager {
             System.out.println("WaitingForWorkersResponse: Got " + message.getBody());
             if (message.getBody().equals(TERMINATE)) {
                 numOfWorkersCreated--;
-
                 if (numOfWorkersCreated == 0) {
                     return true;
                 }

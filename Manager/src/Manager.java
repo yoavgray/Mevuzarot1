@@ -32,7 +32,7 @@ public class Manager {
     public static final String INSTANCE_TYPE = "t2.micro";
     public static final String AMI_ID = "ami-1ecae776";
     public static final String SECURITY_GROUP = "Ass1SecurityGroup";
-    public static final String KEY_PAIR_NAME = "assignment1";
+    public static final String KEY_PAIR_NAME = "yoaveliran";
     public static final String STATS_BUCKET = "statisticsmrbrown";
     public static HashMap<String,Integer> localAppJobsCounter;
     public static HashMap<String,StringBuilder> localAppSummaryFiles;
@@ -179,7 +179,7 @@ public class Manager {
                     bucketName = body[0];
                     String oldUrl = body[1];
                     String newUrl = body[2];
-                    String tmpString = oldUrl + "\t" + newUrl + "\n";
+                    String tmpString ="\n" + oldUrl + "\t" + newUrl ;
 
                     if (localAppSummaryFiles.get(bucketName) != null) {
                         localAppSummaryFiles.put(bucketName, localAppSummaryFiles.get(bucketName).append(tmpString));
@@ -298,7 +298,7 @@ public class Manager {
         riReq.setMinCount(1);
         riReq.setMaxCount(1);
         riReq.withSecurityGroupIds(securityGroup);
-        riReq.setUserData(getUserDataScript());
+//        riReq.setUserData(getUserDataScript());
         RunInstancesResult riRes = ec2Client.runInstances(riReq);
         setNumOfWorkersCreated(getNumOfWorkersCreated() + 1);
         List<String> instanceIdList = new ArrayList<>();

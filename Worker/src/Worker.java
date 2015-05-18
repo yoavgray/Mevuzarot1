@@ -9,6 +9,7 @@ import java.util.UUID;
 import javax.imageio.ImageIO;
 
 import com.amazonaws.auth.AWSCredentials;
+import com.amazonaws.auth.PropertiesCredentials;
 import com.amazonaws.auth.profile.ProfileCredentialsProvider;
 import com.amazonaws.services.ec2.AmazonEC2;
 import com.amazonaws.services.ec2.AmazonEC2Client;
@@ -75,15 +76,12 @@ public class Worker {
 						new ChangeMessageVisibilityRequest(sqsClient.getQueueUrl(WORKERS_QUEUE).toString(), messageReceiptHandle, 15);
 						String fileToUpload = resizeImageFromUrl(new URL(url));
 						if (fileToUpload == null) {
-							failedUrls.add(url);
 							System.out.println("Failed processing " + url + ". Continuing...");
 							sqsClient.deleteMessage(new DeleteMessageRequest(
 									WORKERS_QUEUE, messageReceiptHandle));
 							// send failed message
 							sqsClient.sendMessage(new SendMessageRequest(RESULTS_QUEUE,
 									bucketName + "\t" + "fail"));
-//							sqsClient.deleteMessage(new DeleteMessageRequest(
-//									WORKERS_QUEUE, messageReceiptHandle));
 							continue;
 						}
 						File f = new File(fileToUpload);
@@ -150,7 +148,7 @@ public class Worker {
 
 		PrintWriter writer = null;
 		try {
-			String fileName = "statistics_"+id;
+			String fileName = "statistics_"+id+".txt";
 			writer = new PrintWriter(fileName, "UTF-8");
 			writer.println(statsFile);
 			writer.close();
@@ -172,7 +170,7 @@ public class Worker {
 
 	private static void initAmazonAwsServices() throws IOException {
 		// Set AWS credentials and create services
-		AWSCredentials credentials = new ProfileCredentialsProvider().getCredentials();
+		AWSCredentials credentials = new PropertiesCredentials(Worker.class.getResourceAsStream("AwsCredentials.properties"));
 		ec2Client = new AmazonEC2Client(credentials);
 		s3Client = new AmazonS3Client(credentials);
 		sqsClient = new AmazonSQSClient(credentials);
@@ -202,8 +200,8 @@ public class Worker {
 			ImageIO.write(result, "jpg", file);
 			numOfImageProcessed++;
 			return filePath;
-		} catch (IOException | NullPointerException e) {
-			failedUrls.add(imageUrl.toString());
+		} catch (IOException | RuntimeException e) {
+			failedUrls.add(imageUrl.toString()+"\t Error message: "+e.getMessage());
             if (file != null) {
                 file.delete();
             }

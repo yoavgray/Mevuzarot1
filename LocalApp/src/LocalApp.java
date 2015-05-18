@@ -81,7 +81,7 @@ public class LocalApp {
         // receive the "done" message from the Manager
         boolean isLocalAppDone = false;
         while (!isLocalAppDone) {
-            isLocalAppDone = recieveMessageFromManager();
+            isLocalAppDone = recieveMessageFromManager(outputFileName);
         }
         System.out.println("LocalApp " + bucketName + " is done! Finishing...");
 
@@ -93,7 +93,7 @@ public class LocalApp {
 
 	}
 
-    private static boolean recieveMessageFromManager() throws IOException {
+    private static boolean recieveMessageFromManager(String outputFileName) throws IOException {
         // output file should like like this:
         // bucketName\n
         // workerId + '\t' + oldUrl1 + '\t' + newUrl1
@@ -125,15 +125,16 @@ public class LocalApp {
                     while ((line = br.readLine()) != null) {
                         String[] parsedLine = line.split("\t");
                         if (parsedLine.length == 2) {
-                            result.append("<a href=\"").append(parsedLine[0]).append("\"><img src=\"").append(parsedLine[1]).append("\" width=\"50\" height=\"50\"></a>\n");
-                        } else {
-                            System.out.println("Problem with output file. Check structure!");
-                        }
+							result.append("<a href=\"").append(parsedLine[0]).append("\"><img src=\"").append(parsedLine[1]).append("\" width=\"50\" height=\"50\"></a>\n");
+						}
+//                        } else {
+//                            System.out.println("Problem with output file. Check structure!");
+//                        }
                     }
 
                     String finalHtmlFile = htmlFile.replace("{dynamicPart}", result.toString());
 
-                    String htmlFileName = bucketName.substring(0,9) + "htmlOutputFile.html";
+                    String htmlFileName =  outputFileName + ".html";
 
                     PrintWriter writer = new PrintWriter(htmlFileName, "UTF-8");
                     writer.println(finalHtmlFile);
@@ -206,7 +207,7 @@ public class LocalApp {
 			riReq.setMinCount(1);
 			riReq.setMaxCount(1);
 			riReq.withSecurityGroupIds(securityGroup);
-			riReq.setUserData(getUserDataScript());
+//			riReq.setUserData(getUserDataScript());
 			RunInstancesResult riRes = ec2Client.runInstances(riReq);
 			List<String> instanceIdList = new ArrayList<>();
 			List<Tag> tagsList = new ArrayList<>();

@@ -2,9 +2,7 @@ import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.*;
 import java.net.URL;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 
 import javax.imageio.ImageIO;
 
@@ -38,14 +36,18 @@ public class Worker {
 	public static String id;
 	public static ArrayList<String> failedUrls;
 	public static ArrayList<String> successfulUrls;
-	public static long startTime;
-	public static long finishTime;
+	public static Date startTime;
+	public static Date finishTime;
 	public static long averageRunTimeOnSingleURL;
 	public static int totalNumOfURLsHandled;
+    private static HashMap jobsApplied;
 
-	public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws IOException {
 		doneWork = false;
 		receivedTermination = false;
+		Calendar startCalendar = Calendar.getInstance();
+		startTime = startCalendar.getTime();
+        jobsApplied = new HashMap();
 
 		initAmazonAwsServices();
 
@@ -55,6 +57,7 @@ public class Worker {
 
 			ReceiveMessageRequest receiveMessageRequest = new ReceiveMessageRequest(
                     WORKERS_QUEUE);
+            receiveMessageRequest.setMaxNumberOfMessages(1);
 
 			List<Message> messages = sqsClient.receiveMessage(
 					receiveMessageRequest).getMessages();
@@ -65,15 +68,21 @@ public class Worker {
 					messageReceiptHandle = message.getReceiptHandle();
 					body = message.getBody().split("\t");
 					if (body.length == 2) {
-
+                        //trying to avoid duplicate messages
+                        if (jobsApplied.get(body[1]) != null) {
+                            sqsClient.deleteMessage(new DeleteMessageRequest(
+                                    WORKERS_QUEUE, messageReceiptHandle));
+                            continue;
+                        }
 						totalNumOfURLsHandled++;
 						long msgStartTime = System.currentTimeMillis();
 
 						bucketName = body[0];
 						url = body[1];
 						System.out.println(url);
+                        jobsApplied.put(url,"applied");
 
-						new ChangeMessageVisibilityRequest(sqsClient.getQueueUrl(WORKERS_QUEUE).toString(), messageReceiptHandle, 15);
+						new ChangeMessageVisibilityRequest(sqsClient.getQueueUrl(WORKERS_QUEUE).toString(), messageReceiptHandle, 150);
 						String fileToUpload = resizeImageFromUrl(new URL(url));
 						if (fileToUpload == null) {
 							System.out.println("Failed processing " + url + ". Continuing...");
@@ -103,6 +112,7 @@ public class Worker {
 					} else {
 						//got a termination message!
 						receivedTermination = true;
+                        continue;
 					}
 					sqsClient.deleteMessage(new DeleteMessageRequest(
 							WORKERS_QUEUE, messageReceiptHandle));
@@ -111,12 +121,9 @@ public class Worker {
 				if (receivedTermination) {
 					doneWork = true;
 					System.out.println("Worker is Done working and there are no other messages for worker");
-					finishTime = System.currentTimeMillis();
-					//sending worker a termination message:
-
-					//finish here?
+					Calendar finishCalendar = Calendar.getInstance();
+					finishTime = finishCalendar.getTime();
 				}
-
 
 			}
 		}
@@ -131,12 +138,10 @@ public class Worker {
         // and then send the manager a terminating message
         System.out.println("Worker calculating statistics");
 		System.out.println("Creating Statistics File...");
-		startTime = startTime / 1000;
-		finishTime = finishTime / 1000;
 		averageRunTimeOnSingleURL = averageRunTimeOnSingleURL / 1000;
 
-		String statsFile = "WorkerID: "+ id + "\n Start Time: "+ String.valueOf(startTime) + "sec \n Average run-time on single URL: " + String.valueOf(averageRunTimeOnSingleURL) + "sec";
-		statsFile += "\n Total Number of URLS handled: "+ String.valueOf(totalNumOfURLsHandled) + "\n Finish Time: " + String.valueOf(finishTime) + "sec";
+		String statsFile = "WorkerID: "+ id + "\n Start Time: "+ startTime.toString() + "sec \n Average run-time on single URL: " + String.valueOf(averageRunTimeOnSingleURL) + "sec";
+		statsFile += "\n Total Number of URLS handled: "+ String.valueOf(totalNumOfURLsHandled) + "\n Finish Time: " + finishTime.toString() + "sec";
 		statsFile += "\n List Of Successful URL:";
 		for (String str: successfulUrls) {
 			statsFile += "\n" + str;
@@ -146,7 +151,7 @@ public class Worker {
 			statsFile += "\n" + str;
 		}
 
-		PrintWriter writer = null;
+		PrintWriter writer;
 		try {
 			String fileName = "statistics_"+id+".txt";
 			writer = new PrintWriter(fileName, "UTF-8");
@@ -154,9 +159,7 @@ public class Worker {
 			writer.close();
 			uploadStatsFileToS3(fileName);
 
-		} catch (FileNotFoundException e) {
-			e.printStackTrace();
-		} catch (UnsupportedEncodingException e) {
+		} catch (FileNotFoundException | UnsupportedEncodingException e) {
 			e.printStackTrace();
 		}
     }
@@ -176,7 +179,6 @@ public class Worker {
 		sqsClient = new AmazonSQSClient(credentials);
 		failedUrls = new ArrayList<>();
 		successfulUrls = new ArrayList<>();
-		startTime = System.currentTimeMillis();
 		totalNumOfURLsHandled = 0;
 		averageRunTimeOnSingleURL = 0;
 		id = UUID.randomUUID().toString();
@@ -189,7 +191,12 @@ public class Worker {
 		BufferedImage originalImage;
         File file = null;
 		try {
-			originalImage = ImageIO.read(imageUrl);
+			try {
+				originalImage = ImageIO.read(imageUrl);
+			} catch (ArrayIndexOutOfBoundsException e) {
+				failedUrls.add(imageUrl.toString()+"\t Error message: "+e.getMessage());
+				return null;
+			}
 			int type = originalImage.getType() == 0 ? BufferedImage.TYPE_INT_ARGB
 					: originalImage.getType();
 			BufferedImage result = getResizedImage(originalImage, type);

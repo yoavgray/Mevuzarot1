@@ -7,7 +7,6 @@ import java.util.UUID;
 
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.auth.PropertiesCredentials;
-import com.amazonaws.auth.profile.ProfileCredentialsProvider;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.sqs.model.*;
@@ -207,7 +206,7 @@ public class LocalApp {
 			riReq.setMinCount(1);
 			riReq.setMaxCount(1);
 			riReq.withSecurityGroupIds(securityGroup);
-//			riReq.setUserData(getUserDataScript());
+			//riReq.setUserData(getUserDataScript());
 			RunInstancesResult riRes = ec2Client.runInstances(riReq);
 			List<String> instanceIdList = new ArrayList<>();
 			List<Tag> tagsList = new ArrayList<>();

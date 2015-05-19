@@ -103,6 +103,7 @@ public class Manager {
             System.out.println("WaitingForWorkersResponse: Got " + message.getBody());
             if (message.getBody().equals(TERMINATE)) {
                 numOfWorkersCreated--;
+
                 if (numOfWorkersCreated == 0) {
                     return true;
                 }
@@ -166,6 +167,7 @@ public class Manager {
 
         ReceiveMessageRequest receiveMessageRequest = new ReceiveMessageRequest(
                 RESULTS_QUEUE);
+        receiveMessageRequest.setMaxNumberOfMessages(10);
         List<Message> messages = sqsClient.receiveMessage(
                 receiveMessageRequest).getMessages();
         if (!messages.isEmpty()) {
@@ -298,7 +300,7 @@ public class Manager {
         riReq.setMinCount(1);
         riReq.setMaxCount(1);
         riReq.withSecurityGroupIds(securityGroup);
-//        riReq.setUserData(getUserDataScript());
+        //riReq.setUserData(getUserDataScript());
         RunInstancesResult riRes = ec2Client.runInstances(riReq);
         setNumOfWorkersCreated(getNumOfWorkersCreated() + 1);
         List<String> instanceIdList = new ArrayList<>();

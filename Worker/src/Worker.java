@@ -69,7 +69,7 @@ public class Worker {
 					body = message.getBody().split("\t");
 					if (body.length == 2) {
                         //trying to avoid duplicate messages
-                        if (jobsApplied.get(body[1]) != null) {
+                        if (jobsApplied.get(body) != null) {
                             sqsClient.deleteMessage(new DeleteMessageRequest(
                                     WORKERS_QUEUE, messageReceiptHandle));
                             continue;
@@ -80,7 +80,7 @@ public class Worker {
 						bucketName = body[0];
 						url = body[1];
 						System.out.println(url);
-                        jobsApplied.put(url,"applied");
+                        jobsApplied.put(body,"applied");
 
 						new ChangeMessageVisibilityRequest(sqsClient.getQueueUrl(WORKERS_QUEUE).toString(), messageReceiptHandle, 150);
 						String fileToUpload = resizeImageFromUrl(new URL(url));
@@ -169,6 +169,7 @@ public class Worker {
 		// Upload the file
 		s3Client.putObject(por);
 		System.out.println("File uploaded.");
+        f.delete();
 	}
 
 	private static void initAmazonAwsServices() throws IOException {

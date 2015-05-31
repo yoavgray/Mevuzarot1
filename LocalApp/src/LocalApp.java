@@ -1,9 +1,5 @@
 import java.io.*;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Iterator;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.auth.PropertiesCredentials;
@@ -54,6 +50,9 @@ public class LocalApp {
         String outputFileName = args[1];
         workersRatio = Integer.parseInt(args[2]);
 
+        Calendar sc = Calendar.getInstance();
+        System.out.println("LocalApp Start Time: " + sc.getTime());
+
         htmlFile = "<HTML>\n<HEAD><TITLE>Assignment 1</TITLE>\n</HEAD>\n<BODY>\n{dynamicPart}\n</BODY>\n</HTML>\n";
 
         // initialize all needed AWS services for the assignment
@@ -89,6 +88,8 @@ public class LocalApp {
 			sqsClient.deleteQueue(new DeleteQueueRequest(LOCAL_APP_QUEUE));
 		}
 
+        Calendar fc = Calendar.getInstance();
+        System.out.println("LocalApp Finish Time: " + fc.getTime());
 
 	}
 
@@ -126,14 +127,11 @@ public class LocalApp {
                         if (parsedLine.length == 2) {
 							result.append("<a href=\"").append(parsedLine[0]).append("\"><img src=\"").append(parsedLine[1]).append("\" width=\"50\" height=\"50\"></a>\n");
 						}
-//                        } else {
-//                            System.out.println("Problem with output file. Check structure!");
-//                        }
                     }
 
                     String finalHtmlFile = htmlFile.replace("{dynamicPart}", result.toString());
 
-                    String htmlFileName =  outputFileName + ".html";
+                    String htmlFileName =  outputFileName;
 
                     PrintWriter writer = new PrintWriter(htmlFileName, "UTF-8");
                     writer.println(finalHtmlFile);
@@ -206,7 +204,7 @@ public class LocalApp {
 			riReq.setMinCount(1);
 			riReq.setMaxCount(1);
 			riReq.withSecurityGroupIds(securityGroup);
-			//riReq.setUserData(getUserDataScript());
+			riReq.setUserData(getUserDataScript());
 			RunInstancesResult riRes = ec2Client.runInstances(riReq);
 			List<String> instanceIdList = new ArrayList<>();
 			List<Tag> tagsList = new ArrayList<>();

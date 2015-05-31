@@ -257,6 +257,7 @@ public class Manager {
         // Upload the file
         s3Client.putObject(por);
         System.out.println("File uploaded.");
+        f.delete();
     }
 
     private static void processMessage(String thisBucketName, String fileName, int ratio) throws IOException {
@@ -300,7 +301,7 @@ public class Manager {
         riReq.setMinCount(1);
         riReq.setMaxCount(1);
         riReq.withSecurityGroupIds(securityGroup);
-        //riReq.setUserData(getUserDataScript());
+        riReq.setUserData(getUserDataScript());
         RunInstancesResult riRes = ec2Client.runInstances(riReq);
         setNumOfWorkersCreated(getNumOfWorkersCreated() + 1);
         List<String> instanceIdList = new ArrayList<>();
